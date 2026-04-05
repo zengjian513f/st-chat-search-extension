@@ -179,7 +179,7 @@ function renderResults(results, query) {
         item.innerHTML = `
             <div class="chat-search-result-meta">
                 <span class="chat-search-result-character">${escapeHtml(result.character)}</span>
-                <span>${escapeHtml(result.chatCreateDate)}</span>
+                <span>${escapeHtml(result.file)}</span>
             </div>
             <div class="chat-search-result-sender">${escapeHtml(result.name)}:</div>
             <div class="chat-search-result-text">${highlightedText}</div>
