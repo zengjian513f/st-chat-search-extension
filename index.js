@@ -82,7 +82,7 @@ async function doSearch() {
     let chatFile = null;
 
     if (this_chid !== undefined && characters[this_chid]) {
-        characterName = characters[this_chid].name;
+        characterName = characters[this_chid].avatar ? characters[this_chid].avatar.replace(/\.[^.]+$/, '') : characters[this_chid].name;
         chatFile = getCurrentChatId();
     }
 
@@ -215,8 +215,12 @@ function escapeRegex(str) {
 async function navigateToChat(characterName, chatFile) {
     closeSearchPanel();
 
-    // Find the character index by name
-    const charIndex = characters.findIndex(c => c.name === characterName);
+    // Chat folder name is the avatar filename without extension (e.g. "Lilian_2")
+    // Match by avatar stem, not by display name
+    const charIndex = characters.findIndex(c => {
+        const avatarStem = c.avatar ? c.avatar.replace(/\.[^.]+$/, '') : '';
+        return avatarStem === characterName || c.name === characterName;
+    });
     if (charIndex === -1) {
         toastr.error(`Character "${characterName}" not found.`);
         return;
