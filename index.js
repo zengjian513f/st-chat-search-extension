@@ -7,7 +7,7 @@ import {
     getCurrentChatId,
 } from '../../../../script.js';
 import { selected_group } from '../../../group-chats.js';
-import { getStringHash } from '../../../utils.js';
+import { getStringHash, splitRecursive } from '../../../utils.js';
 
 let panelOpen = false;
 
@@ -376,12 +376,22 @@ async function vectorizeChat(character, file, vectorSettings) {
 
     if (messages.length === 0) return;
 
-    // Hash and prepare items
-    const items = messages.map(m => ({
-        hash: getStringHash(m.text),
-        text: m.text,
-        index: m.index,
-    }));
+    // Split messages into chunks, matching native vectors extension behavior
+    const chunkSize = vectorSettings.message_chunk_size || 400;
+    const delimiters = ['\n\n', '\n', ' ', ''];
+    const items = [];
+
+    for (const m of messages) {
+        const hash = getStringHash(m.text);
+        if (chunkSize > 0 && m.text.length > chunkSize) {
+            const chunks = splitRecursive(m.text, chunkSize, delimiters);
+            for (const chunk of chunks) {
+                items.push({ hash, text: chunk, index: m.index });
+            }
+        } else {
+            items.push({ hash, text: m.text, index: m.index });
+        }
+    }
 
     // Insert in batches of 10
     const batchSize = 10;
