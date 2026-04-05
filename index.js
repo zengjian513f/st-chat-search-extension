@@ -10,6 +10,15 @@ import { selected_group } from '../../../group-chats.js';
 
 let panelOpen = false;
 
+// Persisted state across open/close
+const savedState = {
+    query: '',
+    scope: 'all',
+    resultsHtml: '',
+    scrollTop: 0,
+    hasResults: false,
+};
+
 // ========== UI Creation ==========
 
 function createSearchPanel() {
@@ -34,7 +43,7 @@ function createSearchPanel() {
             <select id="chat-search-scope">
                 <option value="current_chat">Current Chat</option>
                 <option value="current_character">Current Character</option>
-                <option value="all" selected>All Characters</option>
+                <option value="all">All Characters</option>
             </select>
         </div>
         <div class="chat-search-results">
@@ -45,22 +54,49 @@ function createSearchPanel() {
     document.body.appendChild(overlay);
     document.body.appendChild(panel);
 
+    // Restore saved state
+    const input = panel.querySelector('#chat-search-input');
+    const scopeSelect = panel.querySelector('#chat-search-scope');
+    const resultsContainer = panel.querySelector('.chat-search-results');
+
+    input.value = savedState.query;
+    scopeSelect.value = savedState.scope;
+    if (savedState.hasResults) {
+        resultsContainer.innerHTML = savedState.resultsHtml;
+        bindResultClicks(resultsContainer);
+        setTimeout(() => { resultsContainer.scrollTop = savedState.scrollTop; }, 0);
+    }
+
     // Bind events
     panel.querySelector('.chat-search-close').addEventListener('click', closeSearchPanel);
     panel.querySelector('#chat-search-btn').addEventListener('click', doSearch);
-    panel.querySelector('#chat-search-input').addEventListener('keydown', (e) => {
+    input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSearch();
     });
 
     // Focus input
-    setTimeout(() => panel.querySelector('#chat-search-input').focus(), 100);
+    setTimeout(() => input.focus(), 100);
     panelOpen = true;
 }
 
 function closeSearchPanel() {
     const panel = document.getElementById('chat-search-panel');
     const overlay = document.getElementById('chat-search-overlay');
-    if (panel) panel.remove();
+
+    // Save state before removing
+    if (panel) {
+        const input = panel.querySelector('#chat-search-input');
+        const scopeSelect = panel.querySelector('#chat-search-scope');
+        const resultsContainer = panel.querySelector('.chat-search-results');
+        if (input) savedState.query = input.value;
+        if (scopeSelect) savedState.scope = scopeSelect.value;
+        if (resultsContainer) {
+            savedState.resultsHtml = resultsContainer.innerHTML;
+            savedState.scrollTop = resultsContainer.scrollTop;
+            savedState.hasResults = resultsContainer.querySelector('.chat-search-result-item') !== null;
+        }
+        panel.remove();
+    }
     if (overlay) overlay.remove();
     panelOpen = false;
 }
@@ -143,6 +179,8 @@ function renderResults(results, query) {
     for (const result of results) {
         const item = document.createElement('div');
         item.classList.add('chat-search-result-item');
+        item.dataset.character = result.character;
+        item.dataset.file = result.file;
 
         const highlightedText = highlightKeywords(snippetAroundKeywords(result.mes, keywords, 200), keywords);
 
@@ -161,6 +199,14 @@ function renderResults(results, query) {
 
         container.appendChild(item);
     }
+}
+
+function bindResultClicks(container) {
+    container.querySelectorAll('.chat-search-result-item').forEach(item => {
+        item.addEventListener('click', () => {
+            navigateToChat(item.dataset.character, item.dataset.file);
+        });
+    });
 }
 
 function highlightKeywords(text, keywords) {
