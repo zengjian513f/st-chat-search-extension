@@ -393,20 +393,43 @@ async function vectorizeChat(character, file, vectorSettings) {
         }
     }
 
-    // Insert in batches of 10
-    const batchSize = 10;
-    for (let i = 0; i < items.length; i += batchSize) {
-        const batch = items.slice(i, i + batchSize);
-        const response = await fetch('/api/vector/insert', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                ...buildVectorBody(vectorSettings),
-                collectionId: file,
-                items: batch,
-            }),
-        });
-        if (!response.ok) throw new Error(`Vector insert failed: ${response.status}`);
+    // Step 1: Try cached insert — reuse vectors from other collections with same hash
+    const vBody = buildVectorBody(vectorSettings);
+    const cachedResp = await fetch('/api/plugins/chat-search/vector-insert-cached', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            collectionId: file,
+            source: vBody.source,
+            model: vBody.model || '',
+            items,
+        }),
+    });
+
+    if (!cachedResp.ok) throw new Error(`Cached insert failed: ${cachedResp.status}`);
+    const { cachedCount, uncachedItems } = await cachedResp.json();
+
+    if (cachedCount > 0) {
+        console.log(`[chat-search] Reused ${cachedCount} cached vectors for ${file}`);
+    }
+
+    // Step 2: Only call embedding API for truly new items
+    if (uncachedItems.length > 0) {
+        console.log(`[chat-search] Generating ${uncachedItems.length} new embeddings for ${file}`);
+        const batchSize = 10;
+        for (let i = 0; i < uncachedItems.length; i += batchSize) {
+            const batch = uncachedItems.slice(i, i + batchSize);
+            const response = await fetch('/api/vector/insert', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({
+                    ...vBody,
+                    collectionId: file,
+                    items: batch,
+                }),
+            });
+            if (!response.ok) throw new Error(`Vector insert failed: ${response.status}`);
+        }
     }
 }
 
