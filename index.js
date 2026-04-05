@@ -238,13 +238,17 @@ async function doVectorSearch() {
         if (needsVectorization.length > 0) {
             progressDiv.style.display = '';
 
-            // Build vector cache once before processing all chats
+            // Build vector cache once, scoped to chats in search range
             updateProgress(progressDiv, 'Building vector cache...', 0, needsVectorization.length);
             const vBody = buildVectorBody(vectorSettings);
             await fetch('/api/plugins/chat-search/build-vector-cache', {
                 method: 'POST',
                 headers: getRequestHeaders(),
-                body: JSON.stringify({ source: vBody.source, model: vBody.model || '' }),
+                body: JSON.stringify({
+                    source: vBody.source,
+                    model: vBody.model || '',
+                    collectionIds,
+                }),
             });
 
             let done = 0;
