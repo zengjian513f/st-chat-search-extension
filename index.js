@@ -41,7 +41,6 @@ function createSearchPanel() {
                 <button id="chat-search-btn"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
             </div>
             <select id="chat-search-scope">
-                <option value="current_chat">Current Chat</option>
                 <option value="current_character">Current Character</option>
                 <option value="all">All Characters</option>
             </select>
@@ -123,10 +122,6 @@ async function doSearch() {
     }
 
     // Validate scope
-    if (scope === 'current_chat' && (!characterName || !chatFile || selected_group)) {
-        resultsContainer.innerHTML = '<div class="chat-search-status">No character chat is currently open.</div>';
-        return;
-    }
     if (scope === 'current_character' && (!characterName || selected_group)) {
         resultsContainer.innerHTML = '<div class="chat-search-status">No character is currently selected.</div>';
         return;
@@ -136,11 +131,8 @@ async function doSearch() {
 
     try {
         const body = { query, scope };
-        if (scope === 'current_chat' || scope === 'current_character') {
+        if (scope === 'current_character') {
             body.characterName = characterName;
-        }
-        if (scope === 'current_chat') {
-            body.chatFile = chatFile;
         }
 
         const response = await fetch('/api/plugins/chat-search/search', {
