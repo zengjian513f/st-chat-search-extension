@@ -237,8 +237,17 @@ async function doVectorSearch() {
         // Step 4: Vectorize missing chats with progress
         if (needsVectorization.length > 0) {
             progressDiv.style.display = '';
-            let done = 0;
 
+            // Build vector cache once before processing all chats
+            updateProgress(progressDiv, 'Building vector cache...', 0, needsVectorization.length);
+            const vBody = buildVectorBody(vectorSettings);
+            await fetch('/api/plugins/chat-search/build-vector-cache', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ source: vBody.source, model: vBody.model || '' }),
+            });
+
+            let done = 0;
             for (const chat of needsVectorization) {
                 done++;
                 updateProgress(progressDiv, `Vectorizing ${chat.character}/${chat.file}`, done, needsVectorization.length);
