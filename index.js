@@ -194,6 +194,7 @@ function renderResults(results, query) {
         `;
 
         item.addEventListener('click', () => {
+            item.classList.add('visited');
             navigateToChat(result.character, result.file);
         });
 
@@ -204,6 +205,7 @@ function renderResults(results, query) {
 function bindResultClicks(container) {
     container.querySelectorAll('.chat-search-result-item').forEach(item => {
         item.addEventListener('click', () => {
+            item.classList.add('visited');
             navigateToChat(item.dataset.character, item.dataset.file);
         });
     });
