@@ -7,7 +7,6 @@ import {
     getCurrentChatId,
 } from '../../../../script.js';
 import { selected_group } from '../../../group-chats.js';
-import { getStringHash, splitRecursive } from '../../../utils.js';
 
 let panelOpen = false;
 
@@ -136,7 +135,7 @@ async function doKeywordSearch() {
     if (!query) return;
 
     const scope = scopeSelect.value;
-    let characterName = getCharacterAvatarStem();
+    const characterName = getCharacterAvatarStem();
 
     if (scope === 'current_character' && (!characterName || selected_group)) {
         resultsContainer.innerHTML = '<div class="chat-search-status">No character is currently selected.</div>';
@@ -147,9 +146,7 @@ async function doKeywordSearch() {
 
     try {
         const body = { query, scope };
-        if (scope === 'current_character') {
-            body.characterName = characterName;
-        }
+        if (scope === 'current_character') body.characterName = characterName;
 
         const response = await fetch('/api/plugins/chat-search/search', {
             method: 'POST',
@@ -182,14 +179,13 @@ async function doVectorSearch() {
     if (!query) return;
 
     const scope = scopeSelect.value;
-    let characterName = getCharacterAvatarStem();
+    const characterName = getCharacterAvatarStem();
 
     if (scope === 'current_character' && (!characterName || selected_group)) {
         resultsContainer.innerHTML = '<div class="chat-search-status">No character is currently selected.</div>';
         return;
     }
 
-    // Check vector settings
     const vectorSettings = getVectorSettings();
     if (!vectorSettings || !vectorSettings.source) {
         resultsContainer.innerHTML = '<div class="chat-search-status">Vector Storage extension is not configured. Please set it up first.</div>';
@@ -197,98 +193,49 @@ async function doVectorSearch() {
     }
 
     resultsContainer.innerHTML = '<div class="chat-search-status"><i class="fa-solid fa-spinner fa-spin"></i> Preparing vector search...</div>';
+    progressDiv.style.display = '';
 
     try {
-        // Step 1: Get all chats in scope
-        const body = { scope };
-        if (scope === 'current_character') body.characterName = characterName;
+        // Step 1: Vectorize all chats via SSE streaming
+        const vBody = buildVectorBody(vectorSettings);
+        const sseBody = {
+            scope,
+            source: vBody.source,
+            model: vBody.model || '',
+            chunkSize: vectorSettings.message_chunk_size || 400,
+        };
+        if (scope === 'current_character') sseBody.characterName = characterName;
 
-        const chatsResp = await fetch('/api/plugins/chat-search/list-chats', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body),
-        });
-        const chats = await chatsResp.json();
+        const collectionIds = await streamVectorizeAll(sseBody, progressDiv);
+        progressDiv.style.display = 'none';
 
-        if (!chats || chats.length === 0) {
+        if (!collectionIds || collectionIds.length === 0) {
             resultsContainer.innerHTML = '<div class="chat-search-status">No chats found.</div>';
             return;
         }
 
-        // Step 2: Check vectorization status for each chat
-        const collectionIds = chats.map(c => c.file);
-        const vectorStatus = {};
-
-        for (const chat of chats) {
-            try {
-                const hashes = await vectorListHashes(chat.file, vectorSettings);
-                vectorStatus[chat.file] = { hashes, chat };
-            } catch {
-                vectorStatus[chat.file] = { hashes: [], chat };
-            }
-        }
-
-        // Step 3: Find chats that need vectorization
-        const needsVectorization = chats.filter(c => {
-            const status = vectorStatus[c.file];
-            return status.hashes.length === 0 && c.messageCount > 0;
-        });
-
-        // Step 4: Vectorize missing chats with progress
-        if (needsVectorization.length > 0) {
-            progressDiv.style.display = '';
-
-            // Build vector cache once, scoped to chats in search range
-            updateProgress(progressDiv, 'Building vector cache...', 0, needsVectorization.length);
-            const vBody = buildVectorBody(vectorSettings);
-            await fetch('/api/plugins/chat-search/build-vector-cache', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    source: vBody.source,
-                    model: vBody.model || '',
-                    collectionIds,
-                }),
-            });
-
-            let done = 0;
-            for (const chat of needsVectorization) {
-                done++;
-                updateProgress(progressDiv, `Vectorizing ${chat.character}/${chat.file}`, done, needsVectorization.length);
-
-                try {
-                    await vectorizeChat(chat.character, chat.file, vectorSettings);
-                } catch (err) {
-                    console.warn(`[chat-search] Failed to vectorize ${chat.file}:`, err);
-                }
-            }
-
-            progressDiv.style.display = 'none';
-        }
-
-        // Step 5: Query all collections
+        // Step 2: Query all collections
         resultsContainer.innerHTML = '<div class="chat-search-status"><i class="fa-solid fa-spinner fa-spin"></i> Querying vectors...</div>';
 
-        const activeCollections = collectionIds.filter(id => {
-            const s = vectorStatus[id];
-            return (s && s.hashes.length > 0) || needsVectorization.some(c => c.file === id);
+        const queryResults = await vectorQueryMulti(collectionIds, query, vectorSettings);
+
+        // Step 3: Get chat→character mapping
+        const listBody = { scope };
+        if (scope === 'current_character') listBody.characterName = characterName;
+        const chatsResp = await fetch('/api/plugins/chat-search/list-chats', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(listBody),
         });
+        const chats = await chatsResp.json();
 
-        if (activeCollections.length === 0) {
-            resultsContainer.innerHTML = '<div class="chat-search-status">No vectorized chats found.</div>';
-            return;
-        }
-
-        const queryResults = await vectorQueryMulti(activeCollections, query, vectorSettings);
-
-        // Step 6: Build results with metadata
+        // Step 4: Build results
         const results = [];
         for (const [collectionId, data] of Object.entries(queryResults)) {
             if (!data.metadata || data.metadata.length === 0) continue;
             const chat = chats.find(c => c.file === collectionId);
             if (!chat) continue;
 
-            // Take the best match from this collection
             const best = data.metadata[0];
             results.push({
                 character: chat.character,
@@ -304,6 +251,62 @@ async function doVectorSearch() {
         resultsContainer.innerHTML = `<div class="chat-search-status">Error: ${error.message}</div>`;
         progressDiv.style.display = 'none';
     }
+}
+
+// ========== SSE Vectorization ==========
+
+async function streamVectorizeAll(body, progressDiv) {
+    return new Promise((resolve, reject) => {
+        const headers = getRequestHeaders();
+
+        fetch('/api/plugins/chat-search/vectorize-all', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        }).then(async response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Parse SSE events from buffer
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // keep incomplete line
+
+                let eventType = null;
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        eventType = line.slice(7).trim();
+                    } else if (line.startsWith('data: ') && eventType) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            if (eventType === 'progress') {
+                                updateProgress(progressDiv, data.message, data.done, data.total);
+                            } else if (eventType === 'complete') {
+                                resolve(data.collectionIds);
+                                return;
+                            } else if (eventType === 'error') {
+                                reject(new Error(data.message));
+                                return;
+                            }
+                        } catch { /* skip malformed */ }
+                        eventType = null;
+                    }
+                }
+            }
+
+            reject(new Error('SSE stream ended without complete event'));
+        }).catch(reject);
+    });
 }
 
 // ========== Vector API Helpers ==========
@@ -324,41 +327,19 @@ function buildVectorBody(vectorSettings) {
     const src = vectorSettings.source;
 
     const modelMap = {
-        openai: 'openai_model',
-        cohere: 'cohere_model',
-        togetherai: 'togetherai_model',
-        openrouter: 'openrouter_model',
-        electronhub: 'electronhub_model',
-        chutes: 'chutes_model',
-        nanogpt: 'nanogpt_model',
-        siliconflow: 'siliconflow_model',
-        ollama: 'ollama_model',
-        vllm: 'vllm_model',
-        webllm: 'webllm_model',
+        openai: 'openai_model', cohere: 'cohere_model', togetherai: 'togetherai_model',
+        openrouter: 'openrouter_model', electronhub: 'electronhub_model', chutes: 'chutes_model',
+        nanogpt: 'nanogpt_model', siliconflow: 'siliconflow_model', ollama: 'ollama_model',
+        vllm: 'vllm_model', webllm: 'webllm_model',
     };
 
-    if (modelMap[src]) {
-        body.model = vectorSettings[modelMap[src]];
-    }
+    if (modelMap[src]) body.model = vectorSettings[modelMap[src]];
     if (src === 'palm' || src === 'vertexai') {
         body.model = vectorSettings.google_model;
         body.api = src === 'palm' ? 'makersuite' : 'vertexai';
     }
 
     return body;
-}
-
-async function vectorListHashes(collectionId, vectorSettings) {
-    const response = await fetch('/api/vector/list', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...buildVectorBody(vectorSettings),
-            collectionId,
-        }),
-    });
-    if (!response.ok) return [];
-    return await response.json();
 }
 
 async function vectorQueryMulti(collectionIds, searchText, vectorSettings) {
@@ -377,77 +358,10 @@ async function vectorQueryMulti(collectionIds, searchText, vectorSettings) {
     return await response.json();
 }
 
-async function vectorizeChat(character, file, vectorSettings) {
-    // Get messages from backend plugin
-    const msgResp = await fetch('/api/plugins/chat-search/chat-messages', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ character, file }),
-    });
-    if (!msgResp.ok) throw new Error(`Failed to get messages: ${msgResp.status}`);
-    const messages = await msgResp.json();
-
-    if (messages.length === 0) return;
-
-    // Split messages into chunks, matching native vectors extension behavior
-    const chunkSize = vectorSettings.message_chunk_size || 400;
-    const delimiters = ['\n\n', '\n', ' ', ''];
-    const items = [];
-
-    for (const m of messages) {
-        const hash = getStringHash(m.text);
-        if (chunkSize > 0 && m.text.length > chunkSize) {
-            const chunks = splitRecursive(m.text, chunkSize, delimiters);
-            for (const chunk of chunks) {
-                items.push({ hash, text: chunk, index: m.index });
-            }
-        } else {
-            items.push({ hash, text: m.text, index: m.index });
-        }
-    }
-
-    // Step 1: Try cached insert — reuse vectors from other collections with same hash
-    const vBody = buildVectorBody(vectorSettings);
-    const cachedResp = await fetch('/api/plugins/chat-search/vector-insert-cached', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            collectionId: file,
-            source: vBody.source,
-            model: vBody.model || '',
-            items,
-        }),
-    });
-
-    if (!cachedResp.ok) throw new Error(`Cached insert failed: ${cachedResp.status}`);
-    const { cachedCount, uncachedItems } = await cachedResp.json();
-
-    // Step 2: Only call embedding API for truly new items
-    const apiRequests = uncachedItems.length > 0 ? Math.ceil(uncachedItems.length / 10) : 0;
-    console.log(`[chat-search] ${file}: total=${items.length} chunks, cached=${cachedCount}, uncached=${uncachedItems.length}, API requests=${apiRequests}`);
-
-    if (uncachedItems.length > 0) {
-        const batchSize = 10;
-        for (let i = 0; i < uncachedItems.length; i += batchSize) {
-            const batch = uncachedItems.slice(i, i + batchSize);
-            const response = await fetch('/api/vector/insert', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    ...vBody,
-                    collectionId: file,
-                    items: batch,
-                }),
-            });
-            if (!response.ok) throw new Error(`Vector insert failed: ${response.status}`);
-        }
-    }
-}
-
 // ========== Progress ==========
 
 function updateProgress(progressDiv, text, done, total) {
-    const pct = Math.round((done / total) * 100);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
     progressDiv.querySelector('.chat-search-progress-text').textContent = `${text} (${done}/${total})`;
     progressDiv.querySelector('.chat-search-progress-bar-fill').style.width = `${pct}%`;
 }
@@ -555,16 +469,12 @@ function snippetAroundKeywords(text, keywords, maxLen) {
     let earliest = clean.length;
     for (const kw of keywords) {
         const idx = lower.indexOf(kw);
-        if (idx !== -1 && idx < earliest) {
-            earliest = idx;
-        }
+        if (idx !== -1 && idx < earliest) earliest = idx;
     }
 
     let start = Math.max(0, earliest - Math.floor(maxLen / 4));
     let end = Math.min(clean.length, start + maxLen);
-    if (end - start < maxLen) {
-        start = Math.max(0, end - maxLen);
-    }
+    if (end - start < maxLen) start = Math.max(0, end - maxLen);
 
     let snippet = clean.substring(start, end);
     if (start > 0) snippet = '...' + snippet;
@@ -610,7 +520,6 @@ async function navigateToChat(characterName, chatFile) {
         if (this_chid !== charIndex || selected_group) {
             await selectCharacterById(charIndex);
         }
-
         const currentChat = getCurrentChatId();
         if (currentChat !== chatFile) {
             await openCharacterChat(chatFile);
@@ -640,11 +549,8 @@ function addSearchButton() {
     button.appendChild(icon);
     button.appendChild(text);
     button.addEventListener('click', () => {
-        if (panelOpen) {
-            closeSearchPanel();
-        } else {
-            createSearchPanel();
-        }
+        if (panelOpen) closeSearchPanel();
+        else createSearchPanel();
     });
 
     container.appendChild(button);
@@ -655,15 +561,10 @@ function addSearchButton() {
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.shiftKey && e.key === 'F') {
         e.preventDefault();
-        if (panelOpen) {
-            closeSearchPanel();
-        } else {
-            createSearchPanel();
-        }
+        if (panelOpen) closeSearchPanel();
+        else createSearchPanel();
     }
-    if (e.key === 'Escape' && panelOpen) {
-        closeSearchPanel();
-    }
+    if (e.key === 'Escape' && panelOpen) closeSearchPanel();
 });
 
 // ========== Init ==========
