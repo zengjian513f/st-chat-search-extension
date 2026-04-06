@@ -9,12 +9,15 @@ import {
 import { selected_group } from '../../../group-chats.js';
 
 let panelOpen = false;
+let activeAbort = null;
 
 // Persisted state across open/close
 const savedState = {
     query: '',
     scope: 'all',
     mode: 'keyword',
+    onePerChat: true,
+    dedup: true,
     resultsHtml: '',
     scrollTop: 0,
     hasResults: false,
@@ -41,14 +44,23 @@ function createSearchPanel() {
                 <input type="text" id="chat-search-input" placeholder="Keywords separated by spaces..." autocomplete="off" />
                 <button id="chat-search-btn"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
             </div>
-            <select id="chat-search-mode">
-                <option value="keyword">Keyword</option>
-                <option value="vector">Fuzzy (Vector)</option>
-            </select>
-            <select id="chat-search-scope">
-                <option value="current_character">Current Character</option>
-                <option value="all">All Characters</option>
-            </select>
+        </div>
+        <div class="chat-search-options">
+            <fieldset class="chat-search-radio-group">
+                <legend>Mode</legend>
+                <label><input type="radio" name="chat-search-mode" value="keyword" checked /> Keyword</label>
+                <label><input type="radio" name="chat-search-mode" value="vector" /> Fuzzy</label>
+            </fieldset>
+            <fieldset class="chat-search-radio-group">
+                <legend>Scope</legend>
+                <label><input type="radio" name="chat-search-scope" value="current_character" /> Current Char</label>
+                <label><input type="radio" name="chat-search-scope" value="all" checked /> All</label>
+            </fieldset>
+            <fieldset class="chat-search-radio-group">
+                <legend>Filter</legend>
+                <label><input type="checkbox" id="chat-search-one-per-chat" checked /> One per chat</label>
+                <label><input type="checkbox" id="chat-search-dedup" checked /> Dedup branches</label>
+            </fieldset>
         </div>
         <div class="chat-search-progress" style="display:none;">
             <div class="chat-search-progress-text"></div>
@@ -66,13 +78,15 @@ function createSearchPanel() {
 
     // Restore saved state
     const input = panel.querySelector('#chat-search-input');
-    const scopeSelect = panel.querySelector('#chat-search-scope');
-    const modeSelect = panel.querySelector('#chat-search-mode');
     const resultsContainer = panel.querySelector('.chat-search-results');
 
     input.value = savedState.query;
-    scopeSelect.value = savedState.scope;
-    modeSelect.value = savedState.mode;
+    const modeRadio = panel.querySelector(`input[name="chat-search-mode"][value="${savedState.mode}"]`);
+    if (modeRadio) modeRadio.checked = true;
+    const scopeRadio = panel.querySelector(`input[name="chat-search-scope"][value="${savedState.scope}"]`);
+    if (scopeRadio) scopeRadio.checked = true;
+    panel.querySelector('#chat-search-one-per-chat').checked = savedState.onePerChat;
+    panel.querySelector('#chat-search-dedup').checked = savedState.dedup;
     if (savedState.hasResults) {
         resultsContainer.innerHTML = savedState.resultsHtml;
         bindResultClicks(resultsContainer);
@@ -91,17 +105,26 @@ function createSearchPanel() {
 }
 
 function closeSearchPanel() {
+    if (activeAbort) {
+        activeAbort.abort();
+        activeAbort = null;
+    }
+
     const panel = document.getElementById('chat-search-panel');
     const overlay = document.getElementById('chat-search-overlay');
 
     if (panel) {
         const input = panel.querySelector('#chat-search-input');
-        const scopeSelect = panel.querySelector('#chat-search-scope');
-        const modeSelect = panel.querySelector('#chat-search-mode');
         const resultsContainer = panel.querySelector('.chat-search-results');
         if (input) savedState.query = input.value;
-        if (scopeSelect) savedState.scope = scopeSelect.value;
-        if (modeSelect) savedState.mode = modeSelect.value;
+        const modeRadio = panel.querySelector('input[name="chat-search-mode"]:checked');
+        if (modeRadio) savedState.mode = modeRadio.value;
+        const scopeRadio = panel.querySelector('input[name="chat-search-scope"]:checked');
+        if (scopeRadio) savedState.scope = scopeRadio.value;
+        const onePerChat = panel.querySelector('#chat-search-one-per-chat');
+        const dedup = panel.querySelector('#chat-search-dedup');
+        if (onePerChat) savedState.onePerChat = onePerChat.checked;
+        if (dedup) savedState.dedup = dedup.checked;
         if (resultsContainer) {
             savedState.resultsHtml = resultsContainer.innerHTML;
             savedState.scrollTop = resultsContainer.scrollTop;
@@ -116,7 +139,7 @@ function closeSearchPanel() {
 // ========== Search Dispatch ==========
 
 async function doSearch() {
-    const mode = document.getElementById('chat-search-mode').value;
+    const mode = document.querySelector('input[name="chat-search-mode"]:checked').value;
     if (mode === 'vector') {
         await doVectorSearch();
     } else {
@@ -128,7 +151,7 @@ async function doSearch() {
 
 async function doKeywordSearch() {
     const input = document.getElementById('chat-search-input');
-    const scopeSelect = document.getElementById('chat-search-scope');
+    const scopeSelect = document.querySelector('input[name="chat-search-scope"]:checked');
     const resultsContainer = document.querySelector('#chat-search-panel .chat-search-results');
 
     const query = input.value.trim();
@@ -145,7 +168,10 @@ async function doKeywordSearch() {
     resultsContainer.innerHTML = '<div class="chat-search-status"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
 
     try {
-        const body = { query, scope };
+        const onePerChat = document.getElementById('chat-search-one-per-chat').checked;
+        const dedup = document.getElementById('chat-search-dedup').checked;
+
+        const body = { query, scope, onePerChat };
         if (scope === 'current_character') body.characterName = characterName;
 
         const response = await fetch('/api/plugins/chat-search/search', {
@@ -160,7 +186,9 @@ async function doKeywordSearch() {
         }
 
         const data = await response.json();
-        renderKeywordResults(data.results, query);
+        let results = data.results;
+        if (dedup) results = deduplicateResults(results);
+        renderKeywordResults(results, query);
     } catch (error) {
         console.error('[chat-search] Search error:', error);
         resultsContainer.innerHTML = `<div class="chat-search-status">Error: ${error.message}</div>`;
@@ -171,7 +199,7 @@ async function doKeywordSearch() {
 
 async function doVectorSearch() {
     const input = document.getElementById('chat-search-input');
-    const scopeSelect = document.getElementById('chat-search-scope');
+    const scopeSelect = document.querySelector('input[name="chat-search-scope"]:checked');
     const resultsContainer = document.querySelector('#chat-search-panel .chat-search-results');
     const progressDiv = document.querySelector('#chat-search-panel .chat-search-progress');
 
@@ -214,10 +242,26 @@ async function doVectorSearch() {
             return;
         }
 
-        // Step 2: Query all collections
+        // Step 2: Query all collections with scores
         resultsContainer.innerHTML = '<div class="chat-search-status"><i class="fa-solid fa-spinner fa-spin"></i> Querying vectors...</div>';
 
-        const queryResults = await vectorQueryMulti(collectionIds, query, vectorSettings);
+        const onePerChat = document.getElementById('chat-search-one-per-chat').checked;
+        const dedup = document.getElementById('chat-search-dedup').checked;
+
+        const queryResp = await fetch('/api/plugins/chat-search/query-with-scores', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                collectionIds,
+                searchText: query,
+                source: vBody.source,
+                model: vBody.model || '',
+                threshold: vectorSettings.score_threshold || 0.25,
+                topK: onePerChat ? 1 : 10,
+            }),
+        });
+        if (!queryResp.ok) throw new Error(`Query failed: ${queryResp.status}`);
+        const scoredResults = await queryResp.json();
 
         // Step 3: Get chat→character mapping
         const listBody = { scope };
@@ -229,23 +273,19 @@ async function doVectorSearch() {
         });
         const chats = await chatsResp.json();
 
-        // Step 4: Build results
-        const results = [];
-        for (const [collectionId, data] of Object.entries(queryResults)) {
-            if (!data.metadata || data.metadata.length === 0) continue;
-            const chat = chats.find(c => c.file === collectionId);
-            if (!chat) continue;
+        // Step 4: Build results (already sorted by score desc)
+        const results = scoredResults.map(r => {
+            const chat = chats.find(c => c.file === r.collectionId);
+            return {
+                character: chat?.character || '?',
+                file: r.collectionId,
+                text: r.text,
+                index: r.index,
+                score: r.score,
+            };
+        });
 
-            const best = data.metadata[0];
-            results.push({
-                character: chat.character,
-                file: collectionId,
-                text: best.text,
-                index: best.index,
-            });
-        }
-
-        renderVectorResults(results, query);
+        renderVectorResults(dedup ? deduplicateResults(results) : results, query);
     } catch (error) {
         console.error('[chat-search] Vector search error:', error);
         resultsContainer.innerHTML = `<div class="chat-search-status">Error: ${error.message}</div>`;
@@ -258,11 +298,14 @@ async function doVectorSearch() {
 async function streamVectorizeAll(body, progressDiv) {
     return new Promise((resolve, reject) => {
         const headers = getRequestHeaders();
+        activeAbort = new AbortController();
+        const signal = activeAbort.signal;
 
-        fetch('/api/plugins/chat-search/vectorize-all', {
-            method: 'POST',
+        const params = new URLSearchParams(body);
+        fetch('/api/plugins/chat-search/vectorize-all?' + params.toString(), {
+            method: 'GET',
             headers,
-            body: JSON.stringify(body),
+            signal,
         }).then(async response => {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -342,21 +385,6 @@ function buildVectorBody(vectorSettings) {
     return body;
 }
 
-async function vectorQueryMulti(collectionIds, searchText, vectorSettings) {
-    const response = await fetch('/api/vector/query-multi', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...buildVectorBody(vectorSettings),
-            collectionIds,
-            searchText,
-            topK: 200,
-            threshold: vectorSettings.score_threshold || 0.25,
-        }),
-    });
-    if (!response.ok) throw new Error(`Vector query failed: ${response.status}`);
-    return await response.json();
-}
 
 // ========== Progress ==========
 
@@ -423,9 +451,11 @@ function renderVectorResults(results, query) {
 
         const snippet = snippetAroundKeywords(result.text, query.toLowerCase().split(/\s+/).filter(Boolean), 200);
 
+        const scoreText = result.score !== undefined ? ` (${(result.score * 100).toFixed(1)}%)` : '';
+
         item.innerHTML = `
             <div class="chat-search-result-meta">
-                <span class="chat-search-result-character">${escapeHtml(result.character)}</span>
+                <span class="chat-search-result-character">${escapeHtml(result.character)}${scoreText}</span>
                 <span>${escapeHtml(result.file)}</span>
             </div>
             <div class="chat-search-result-text">${escapeHtml(snippet)}</div>
@@ -480,6 +510,17 @@ function snippetAroundKeywords(text, keywords, maxLen) {
     if (start > 0) snippet = '...' + snippet;
     if (end < clean.length) snippet = snippet + '...';
     return snippet;
+}
+
+function deduplicateResults(results) {
+    const seen = new Set();
+    return results.filter(r => {
+        // Use matched text (or mes) as dedup key, truncated to first 100 chars
+        const text = (r.mes || r.text || '').substring(0, 100);
+        if (seen.has(text)) return false;
+        seen.add(text);
+        return true;
+    });
 }
 
 function escapeHtml(str) {
