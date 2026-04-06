@@ -422,13 +422,11 @@ async function vectorizeChat(character, file, vectorSettings) {
     if (!cachedResp.ok) throw new Error(`Cached insert failed: ${cachedResp.status}`);
     const { cachedCount, uncachedItems } = await cachedResp.json();
 
-    if (cachedCount > 0) {
-        console.log(`[chat-search] Reused ${cachedCount} cached vectors for ${file}`);
-    }
-
     // Step 2: Only call embedding API for truly new items
+    const apiRequests = uncachedItems.length > 0 ? Math.ceil(uncachedItems.length / 10) : 0;
+    console.log(`[chat-search] ${file}: total=${items.length} chunks, cached=${cachedCount}, uncached=${uncachedItems.length}, API requests=${apiRequests}`);
+
     if (uncachedItems.length > 0) {
-        console.log(`[chat-search] Generating ${uncachedItems.length} new embeddings for ${file}`);
         const batchSize = 10;
         for (let i = 0; i < uncachedItems.length; i += batchSize) {
             const batch = uncachedItems.slice(i, i + batchSize);
