@@ -10,6 +10,7 @@ import { selected_group } from '../../../group-chats.js';
 
 let panelOpen = false;
 let activeAbort = null;
+let searchPromise = null;
 
 // Persisted state across open/close
 const savedState = {
@@ -95,7 +96,7 @@ function createSearchPanel() {
 
     // Bind events
     panel.querySelector('.chat-search-close').addEventListener('click', closeSearchPanel);
-    panel.querySelector('#chat-search-btn').addEventListener('click', doSearch);
+    panel.querySelector('#chat-search-btn').addEventListener('click', () => doSearch());
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSearch();
     });
@@ -139,12 +140,22 @@ function closeSearchPanel() {
 // ========== Search Dispatch ==========
 
 async function doSearch() {
+    if (activeAbort) {
+        activeAbort.abort();
+        activeAbort = null;
+    }
+    // Wait for previous search to fully finish after abort
+    if (searchPromise) {
+        await searchPromise.catch(() => {});
+    }
     const mode = document.querySelector('input[name="chat-search-mode"]:checked').value;
     if (mode === 'vector') {
-        await doVectorSearch();
+        searchPromise = doVectorSearch();
     } else {
-        await doKeywordSearch();
+        searchPromise = doKeywordSearch();
     }
+    await searchPromise;
+    searchPromise = null;
 }
 
 // ========== Keyword Search ==========
@@ -287,6 +298,7 @@ async function doVectorSearch() {
 
         renderVectorResults(dedup ? deduplicateResults(results) : results, query);
     } catch (error) {
+        if (error.name === 'AbortError') return;
         console.error('[chat-search] Vector search error:', error);
         resultsContainer.innerHTML = `<div class="chat-search-status">Error: ${error.message}</div>`;
         progressDiv.style.display = 'none';
@@ -302,6 +314,7 @@ async function streamVectorizeAll(body, progressDiv) {
         const signal = activeAbort.signal;
 
         const params = new URLSearchParams(body);
+        params.set('requestId', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
         fetch('/api/plugins/chat-search/vectorize-all?' + params.toString(), {
             method: 'GET',
             headers,
