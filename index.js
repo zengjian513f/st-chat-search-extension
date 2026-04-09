@@ -7,6 +7,8 @@ import {
     getCurrentChatId,
 } from '../../../../script.js';
 import { selected_group } from '../../../group-chats.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 
 let panelOpen = false;
 let activeAbort = null;
@@ -625,5 +627,16 @@ document.addEventListener('keydown', (e) => {
 
 jQuery(() => {
     addSearchButton();
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'chat-search',
+        callback: async () => {
+            if (panelOpen) closeSearchPanel();
+            else createSearchPanel();
+            return '';
+        },
+        helpString: 'Open the global chat search panel.',
+    }));
+
     console.log('[chat-search] Extension loaded.');
 });
