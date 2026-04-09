@@ -21,6 +21,7 @@ const savedState = {
     mode: 'keyword',
     onePerChat: true,
     dedup: true,
+    days: 0,
     resultsHtml: '',
     scrollTop: 0,
     hasResults: false,
@@ -63,6 +64,7 @@ function createSearchPanel() {
                 <legend>Filter</legend>
                 <label><input type="checkbox" id="chat-search-one-per-chat" checked /> One per chat</label>
                 <label><input type="checkbox" id="chat-search-dedup" checked /> Dedup branches</label>
+                <label>Days: <input type="number" id="chat-search-days" min="0" value="0" style="width:50px;" title="Only search chats within N days (0 = unlimited)" /></label>
             </fieldset>
         </div>
         <div class="chat-search-progress" style="display:none;">
@@ -90,6 +92,7 @@ function createSearchPanel() {
     if (scopeRadio) scopeRadio.checked = true;
     panel.querySelector('#chat-search-one-per-chat').checked = savedState.onePerChat;
     panel.querySelector('#chat-search-dedup').checked = savedState.dedup;
+    panel.querySelector('#chat-search-days').value = savedState.days;
     if (savedState.hasResults) {
         resultsContainer.innerHTML = savedState.resultsHtml;
         bindResultClicks(resultsContainer);
@@ -128,6 +131,8 @@ function closeSearchPanel() {
         const dedup = panel.querySelector('#chat-search-dedup');
         if (onePerChat) savedState.onePerChat = onePerChat.checked;
         if (dedup) savedState.dedup = dedup.checked;
+        const daysInput = panel.querySelector('#chat-search-days');
+        if (daysInput) savedState.days = Number(daysInput.value) || 0;
         if (resultsContainer) {
             savedState.resultsHtml = resultsContainer.innerHTML;
             savedState.scrollTop = resultsContainer.scrollTop;
@@ -183,8 +188,9 @@ async function doKeywordSearch() {
     try {
         const onePerChat = document.getElementById('chat-search-one-per-chat').checked;
         const dedup = document.getElementById('chat-search-dedup').checked;
+        const days = Number(document.getElementById('chat-search-days').value) || 0;
 
-        const body = { query, scope, onePerChat };
+        const body = { query, scope, onePerChat, days };
         if (scope === 'current_character') body.characterName = characterName;
 
         const response = await fetch('/api/plugins/chat-search/search', {
@@ -239,11 +245,13 @@ async function doVectorSearch() {
     try {
         // Step 1: Vectorize all chats via SSE streaming
         const vBody = buildVectorBody(vectorSettings);
+        const days = Number(document.getElementById('chat-search-days').value) || 0;
         const sseBody = {
             scope,
             source: vBody.source,
             model: vBody.model || '',
             chunkSize: vectorSettings.message_chunk_size || 400,
+            days,
         };
         if (scope === 'current_character') sseBody.characterName = characterName;
 

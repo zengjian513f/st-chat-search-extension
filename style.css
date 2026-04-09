@@ -249,6 +249,15 @@
     transition: width 0.2s;
 }
 
+#chat-search-panel .fa-spin {
+    animation: chat-search-spin 1s linear infinite !important;
+}
+
+@keyframes chat-search-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 #chat-search-overlay {
     position: fixed;
     top: 0;
