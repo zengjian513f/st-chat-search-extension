@@ -646,5 +646,23 @@ jQuery(() => {
         helpString: 'Open the global chat search panel.',
     }));
 
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'purge-all-vectors',
+        callback: async () => {
+            const resp = await fetch('/api/plugins/chat-search/purge-all-vectors', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            if (!resp.ok) {
+                toastr.error('Failed to purge vectors');
+                return '';
+            }
+            const data = await resp.json();
+            toastr.success(data.message);
+            return '';
+        },
+        helpString: 'Purge all vector indexes for all sources.',
+    }));
+
     console.log('[chat-search] Extension loaded.');
 });
